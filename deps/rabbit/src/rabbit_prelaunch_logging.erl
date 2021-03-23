@@ -125,7 +125,9 @@
 %% domain.
 
 -type console_props() :: [{level, logger:level()} |
-                          {enabled, boolean()}].
+                          {enabled, boolean()} |
+                          {stdio, stdout | stderr} |
+                          {formatter, {atom(), term()}}].
 %% Console properties are the parameters in the configuration file for a
 %% console-based handler.
 
@@ -137,7 +139,8 @@
                        {file, file:filename() | false} |
                        {date, string()} |
                        {size, non_neg_integer()} |
-                       {count, non_neg_integer()}].
+                       {count, non_neg_integer()} |
+                       {formatter, {atom(), term()}}].
 %% File properties are the parameters in the configuration file for a
 %% file-based handler.
 
@@ -522,7 +525,58 @@ normalize_main_log_config(Props, DefaultProps) ->
                   Level     -> #{outputs => [],
                                  level => Level}
               end,
-    normalize_main_log_config1(Props, Outputs).
+    Props1 = compute_implicitly_enabled_output(Props),
+    normalize_main_log_config1(Props1, Outputs).
+
+compute_implicitly_enabled_output(Props) ->
+    {ConsoleEnabled, Props1} = compute_implicitly_enabled_output(
+                                 console, Props),
+    {ExchangeEnabled, Props2} = compute_implicitly_enabled_output(
+                                  exchange, Props1),
+    {SyslogEnabled, Props3} = compute_implicitly_enabled_output(
+                                syslog, Props2),
+    FileDisabledByDefault =
+    ConsoleEnabled orelse ExchangeEnabled orelse SyslogEnabled,
+
+    FileProps = proplists:get_value(file, Props3),
+    case is_output_explicitely_enabled(FileProps) of
+        true ->
+            Props3;
+        false ->
+            case FileDisabledByDefault of
+                true ->
+                    FileProps1 = lists:keystore(
+                                   file, 1, FileProps, {file, false}),
+                    lists:keystore(
+                      file, 1, Props3, {file, FileProps1});
+                false ->
+                    Props3
+            end
+    end.
+
+compute_implicitly_enabled_output(PropName, Props) ->
+    SubProps = proplists:get_value(PropName, Props),
+    {Enabled, SubProps1} = compute_implicitly_enabled_output1(SubProps),
+    {Enabled,
+     lists:keystore(PropName, 1, Props, {PropName, SubProps1})}.
+
+compute_implicitly_enabled_output1(SubProps) ->
+    %% We consider the output enabled or disabled if:
+    %%     * it is explicitely marked as such, or
+    %%     * the level is set to a log level (enabled) or `none' (disabled)
+    Enabled = proplists:get_value(
+                enabled, SubProps,
+                proplists:get_value(level, SubProps, none) =/= none),
+    {Enabled,
+     lists:keystore(enabled, 1, SubProps, {enabled, Enabled})}.
+
+is_output_explicitely_enabled(FileProps) ->
+    %% We consider the output enabled or disabled if:
+    %%     * the file is explicitely set, or
+    %%     * the level is set to a log level (enabled) or `none' (disabled)
+    File = proplists:get_value(file, FileProps),
+    Level = proplists:get_value(level, FileProps),
+    is_list(File) orelse (Level =/= undefined andalso Level =/= none).
 
 normalize_main_log_config1([{Type, Props} | Rest],
                            #{outputs := Outputs} = LogConfig) ->
@@ -571,42 +625,106 @@ normalize_main_output(exchange, Props, Outputs) ->
                                  [logger:handler_config()]) ->
     [logger:handler_config()].
 
-normalize_main_file_output([{file, false} | _], _, Outputs) ->
+normalize_main_file_output(Props, Output, Outputs) ->
+    Enabled = case proplists:get_value(file, Props) of
+                  false     -> false;
+                  _         -> true
+              end,
+    case Enabled of
+        true  -> normalize_main_file_output1(Props, Output, Outputs);
+        false -> remove_main_file_output(Outputs)
+    end.
+
+normalize_main_file_output1(
+  [{file, Filename} | Rest],
+  #{config := Config} = Output, Outputs) ->
+    Output1 = Output#{config => Config#{file => Filename}},
+    normalize_main_file_output1(Rest, Output1, Outputs);
+normalize_main_file_output1(
+  [{level, Level} | Rest],
+  Output, Outputs) ->
+    Output1 = Output#{level => Level},
+    normalize_main_file_output1(Rest, Output1, Outputs);
+normalize_main_file_output1(
+  [{date, DateSpec} | Rest],
+  #{config := Config} = Output, Outputs) ->
+    Output1 = Output#{config => Config#{rotate_on_date => DateSpec}},
+    normalize_main_file_output1(Rest, Output1, Outputs);
+normalize_main_file_output1(
+  [{size, Size} | Rest],
+  #{config := Config} = Output, Outputs) ->
+    Output1 = Output#{config => Config#{max_no_bytes => Size}},
+    normalize_main_file_output1(Rest, Output1, Outputs);
+normalize_main_file_output1(
+  [{count, Count} | Rest],
+  #{config := Config} = Output, Outputs) ->
+    Output1 = Output#{config => Config#{max_no_files => Count}},
+    normalize_main_file_output1(Rest, Output1, Outputs);
+normalize_main_file_output1(
+  [{formatter, undefined} | Rest],
+  Output, Outputs) ->
+    normalize_main_file_output1(Rest, Output, Outputs);
+normalize_main_file_output1(
+  [{formatter, Formatter} | Rest],
+  Output, Outputs) ->
+    Output1 = Output#{formatter => Formatter},
+    normalize_main_file_output1(Rest, Output1, Outputs);
+normalize_main_file_output1([], Output, Outputs) ->
+    [Output | Outputs].
+
+remove_main_file_output(Outputs) ->
     lists:filter(
       fun
           (#{module := rabbit_logger_std_h,
              config := #{type := file}}) -> false;
           (_)                            -> true
-      end, Outputs);
-normalize_main_file_output([{file, Filename} | Rest],
-                           #{config := Config} = Output, Outputs) ->
-    Output1 = Output#{config => Config#{file => Filename}},
-    normalize_main_file_output(Rest, Output1, Outputs);
-normalize_main_file_output([{level, Level} | Rest],
-                           Output, Outputs) ->
-    Output1 = Output#{level => Level},
-    normalize_main_file_output(Rest, Output1, Outputs);
-normalize_main_file_output([{date, DateSpec} | Rest],
-                           #{config := Config} = Output, Outputs) ->
-    Output1 = Output#{config => Config#{rotate_on_date => DateSpec}},
-    normalize_main_file_output(Rest, Output1, Outputs);
-normalize_main_file_output([{size, Size} | Rest],
-                           #{config := Config} = Output, Outputs) ->
-    Output1 = Output#{config => Config#{max_no_bytes => Size}},
-    normalize_main_file_output(Rest, Output1, Outputs);
-normalize_main_file_output([{count, Count} | Rest],
-                           #{config := Config} = Output, Outputs) ->
-    Output1 = Output#{config => Config#{max_no_files => Count}},
-    normalize_main_file_output(Rest, Output1, Outputs);
-normalize_main_file_output([], Output, Outputs) ->
-    [Output | Outputs].
+      end, Outputs).
 
 -spec normalize_main_console_output(console_props(), logger:handler_config(),
                                     [logger:handler_config()]) ->
     [logger:handler_config()].
 
-normalize_main_console_output(
-  [{enabled, false} | _],
+normalize_main_console_output(Props, Output, Outputs) ->
+    Enabled = proplists:get_value(enabled, Props),
+    case Enabled of
+        true  -> normalize_main_console_output1(Props, Output, Outputs);
+        false -> remove_main_console_output(Output, Outputs)
+    end.
+
+normalize_main_console_output1(
+  [{enabled, true} | Rest],
+  Output, Outputs) ->
+    normalize_main_console_output1(Rest, Output, Outputs);
+normalize_main_console_output1(
+  [{level, Level} | Rest],
+  Output, Outputs) ->
+    Output1 = Output#{level => Level},
+    normalize_main_console_output1(Rest, Output1, Outputs);
+normalize_main_console_output1(
+  [{stdio, stdout} | Rest],
+  #{config := Config} = Output, Outputs) ->
+    Config1 = Config#{type => standard_io},
+    Output1 = Output#{config => Config1},
+    normalize_main_console_output1(Rest, Output1, Outputs);
+normalize_main_console_output1(
+  [{stdio, stderr} | Rest],
+  #{config := Config} = Output, Outputs) ->
+    Config1 = Config#{type => standard_error},
+    Output1 = Output#{config => Config1},
+    normalize_main_console_output1(Rest, Output1, Outputs);
+normalize_main_console_output1(
+  [{formatter, undefined} | Rest],
+  Output, Outputs) ->
+    normalize_main_console_output1(Rest, Output, Outputs);
+normalize_main_console_output1(
+  [{formatter, Formatter} | Rest],
+  Output, Outputs) ->
+    Output1 = Output#{formatter => Formatter},
+    normalize_main_console_output1(Rest, Output1, Outputs);
+normalize_main_console_output1([], Output, Outputs) ->
+    [Output | Outputs].
+
+remove_main_console_output(
   #{module := Mod1, config := #{type := Stddev}},
   Outputs)
   when ?IS_STD_H_COMPAT(Mod1) andalso
@@ -624,21 +742,12 @@ normalize_main_console_output(
           (_) ->
               true
       end, Outputs);
-normalize_main_console_output(
-  [{enabled, false} | _],
+remove_main_console_output(
   #{module := Mod},
   Outputs)
   when Mod =:= syslog_logger_h orelse
        Mod =:= rabbit_logger_exchange_h ->
-    lists:filter(fun(#{module := M}) -> M =/= Mod end, Outputs);
-normalize_main_console_output([{enabled, true} | Rest], Output, Outputs) ->
-    normalize_main_console_output(Rest, Output, Outputs);
-normalize_main_console_output([{level, Level} | Rest],
-                              Output, Outputs) ->
-    Output1 = Output#{level => Level},
-    normalize_main_console_output(Rest, Output1, Outputs);
-normalize_main_console_output([], Output, Outputs) ->
-    [Output | Outputs].
+    lists:filter(fun(#{module := M}) -> M =/= Mod end, Outputs).
 
 -spec normalize_per_cat_log_config(per_cat_env()) -> per_cat_log_config().
 
