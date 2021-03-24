@@ -195,8 +195,7 @@ translate_generic_conf(Var, Conf) ->
                          {epoch, usecs, binary};
                      lager_default ->
                          parse_time_format_pattern(
-                           "$year-$month-$day "
-                           "$hour:$minute:$second.$millisecond");
+                           "2006-01-02 15:04:05.000");
                      Pattern when is_list(Pattern) ->
                          parse_time_format_pattern(Pattern)
                  end,
@@ -218,8 +217,14 @@ translate_generic_conf(Var, Conf) ->
 -spec parse_time_format_pattern(string()) ->
     {local | utc,
      string(),
-     [year | month | day |
-      hour | minute | second | millisecond | microsecond]}.
+     [year_four_digits | year_two_digits |
+      month | month_long | month_short |
+      day | day_long | day_short |
+      hour_24 | hour_12 |
+      meridiem | mERIDIEM |
+      minute | second |
+      {second_fractional, non_neg_integer()}]
+    }.
 %% @doc
 %% Parses a custom time format pattern and creates a format string and a list
 %% of named arguments.
@@ -228,9 +233,25 @@ translate_generic_conf(Var, Conf) ->
 %% values) based on the log event and use the format string to format the
 %% timestamp.
 %%
-%% The pattern must be a string. It accepts the following variables: `$year',
-%% `$month', `$day', `$hour', `$minute', `$second', `$millisecond',
-%% `$microsecond'.
+%% The custom time format pattern must be a string which uses the reference time
+%% "Mon Jan 2 15:04:05".
+%% The reference time can be thought of as
+%% "01/02 03:04:05PM '06".
+%%
+%% The following mappings show supported reference values which should be used in
+%% the custom time format pattern:
+%%
+%% Year: `06', `2006'
+%% Month: `1', `01', `Jan', `January'
+%% Day: `2', `02', `_2' (two digits right justified, i.e. underscore represents a space)
+%% Day of the week: `Mon' `Monday'
+%% Hour:	`3' (12-hour), `03' (12-hour zero prefixed), `15' (24-hour)
+%% Minute: `4', `04'
+%% Second:`5', `05'
+%% Fraction of second: `.000' (millisecond), `.000000' (microsecond)
+%% A decimal point followed by one to six zeros represents a fractional second,
+%% printed to the given number of decimal places.
+%% 12-hour period: `pm',`PM'
 %%
 %% It can be prepended by `utc:' or `local:' to indicate which timezone to
 %% take. It defaults to the local time.
@@ -245,51 +266,123 @@ parse_time_format_pattern("utc:" ++ Pattern) ->
 parse_time_format_pattern(Pattern) ->
     parse_time_format_pattern(Pattern, local, [], []).
 
-parse_time_format_pattern("$year" ++ Rest, Tz, Format, Args) ->
+parse_time_format_pattern("2006" ++ Rest, Tz, Format, Args) ->
     Format1 = ["~4..0b" | Format],
-    Args1 = [year | Args],
+    Args1 = [year_four_digits | Args],
     parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern("$month" ++ Rest, Tz, Format, Args) ->
+parse_time_format_pattern("06" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~2..0b" | Format],
+    Args1 = [year_two_digits | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+
+parse_time_format_pattern("15" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~2..0b" | Format],
+    Args1 = [hour_24 | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+parse_time_format_pattern("03" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~2..0b" | Format],
+    Args1 = [hour_12 | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+parse_time_format_pattern("3" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~..0b" | Format],
+    Args1 = [hour_12 | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+
+parse_time_format_pattern("pm" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~s" | Format],
+    Args1 = [meridiem | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+parse_time_format_pattern("PM" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~s" | Format],
+    Args1 = [mERIDIEM | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+
+parse_time_format_pattern("01" ++ Rest, Tz, Format, Args) ->
     Format1 = ["~2..0b" | Format],
     Args1 = [month | Args],
     parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern("$day" ++ Rest, Tz, Format, Args) ->
+parse_time_format_pattern("1" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~..0b" | Format],
+    Args1 = [month | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+parse_time_format_pattern("January" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~s" | Format],
+    Args1 = [month_long | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+parse_time_format_pattern("Jan" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~s" | Format],
+    Args1 = [month_short | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+
+parse_time_format_pattern("02" ++ Rest, Tz, Format, Args) ->
     Format1 = ["~2..0b" | Format],
     Args1 = [day | Args],
     parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern("$hour" ++ Rest, Tz, Format, Args) ->
-    Format1 = ["~2..0b" | Format],
-    Args1 = [hour | Args],
+parse_time_format_pattern("_2" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~2.. b" | Format],
+    Args1 = [day | Args],
     parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern("$minute" ++ Rest, Tz, Format, Args) ->
+parse_time_format_pattern("2" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~..0b" | Format],
+    Args1 = [day | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+parse_time_format_pattern("Monday" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~s" | Format],
+    Args1 = [day_long | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+parse_time_format_pattern("Mon" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~s" | Format],
+    Args1 = [day_short | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+
+parse_time_format_pattern("04" ++ Rest, Tz, Format, Args) ->
     Format1 = ["~2..0b" | Format],
     Args1 = [minute | Args],
     parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern("$second" ++ Rest, Tz, Format, Args) ->
+parse_time_format_pattern("4" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~..0b" | Format],
+    Args1 = [minute | Args],
+    parse_time_format_pattern(Rest, Tz, Format1, Args1);
+
+parse_time_format_pattern("05" ++ Rest, Tz, Format, Args) ->
     Format1 = ["~2..0b" | Format],
     Args1 = [second | Args],
     parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern("$millisecond" ++ Rest, Tz, Format, Args) ->
-    Format1 = ["~3..0b" | Format],
-    Args1 = [millisecond | Args],
+parse_time_format_pattern("5" ++ Rest, Tz, Format, Args) ->
+    Format1 = ["~..0b" | Format],
+    Args1 = [second | Args],
     parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern("$microsecond" ++ Rest, Tz, Format, Args) ->
-    Format1 = ["~3..0b" | Format],
-    Args1 = [microsecond | Args],
-    parse_time_format_pattern(Rest, Tz, Format1, Args1);
-parse_time_format_pattern(Rest, Tz, Format, Args) when Rest =/= "" ->
-    %% We made sure in the guard expression that `Rest' contains at least
-    %% onecharacter. The following regex "eats" at least that character. This
-    %% avoids an infinite loop which would happen if the returned `String' was
-    %% empty and `Rest1' would be the same as `Rest'.
-    {match, [String, Rest1]} = re:run(Rest, "^(.[^$]*)(.*)",
-                                      [{capture, all_but_first, list}]),
-    Format1 = [String | Format],
-    parse_time_format_pattern(Rest1, Tz, Format1, Args);
+
+parse_time_format_pattern(".0" ++ Rest, Tz, Format, Args) ->
+    {N, Rest1} = count_and_trim_leading("0", Rest),
+    DecPlaces = N+1,
+    if DecPlaces > 6 ->
+         error({tooManyDecimalPlacesInTimeFormatsFractionalSecond, DecPlaces});
+       true -> ok
+    end,
+    F = io_lib:format(".~~~..0b..0b", [DecPlaces]),
+    Format1 = [F | Format],
+    Args1 = [{second_fractional, DecPlaces} | Args],
+    parse_time_format_pattern(Rest1, Tz, Format1, Args1);
+parse_time_format_pattern([H|Rest], Tz, Format, Args) ->
+    Format1 = [H | Format],
+    parse_time_format_pattern(Rest, Tz, Format1, Args);
 parse_time_format_pattern("", Tz, Format, Args) ->
     {Tz,
      lists:flatten(lists:reverse(Format)),
      lists:reverse(Args)}.
+
+count_and_trim_leading(L, Str) when is_list(L), is_list(Str) ->
+    count_and_trim_leading(L, Str, 0).
+count_and_trim_leading(L, Str, Acc) ->
+    case Str of
+        [C|Cs] ->
+            case [C] =:= L of
+                true -> count_and_trim_leading(L, Cs, Acc+1);
+                false -> {Acc, Str}
+            end;
+        [] -> {Acc, []}
+  end.
 
 -spec translate_plaintext_formatter_conf(
         string(), cuttlefish_conf:conf(), map()) ->

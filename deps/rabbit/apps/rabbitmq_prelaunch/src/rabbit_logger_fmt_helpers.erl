@@ -45,14 +45,73 @@ format_time1(Timestamp, {UtcOrLocal, Format, Args}) ->
                                end,
     Args1 = lists:map(
               fun
-                  (year)  -> Year;
+                  (year_four_digits)  -> Year;
+                  (year_two_digits)  -> Year rem 100;
                   (month) -> Month;
+                  (month_long) -> case Month of
+                                    1 -> "January";
+                                    2 -> "February";
+                                    3 -> "March";
+                                    4 -> "April";
+                                    5 -> "May";
+                                    6 -> "June";
+                                    7 -> "July";
+                                    8 -> "August";
+                                    9 -> "September";
+                                    10 -> "October";
+                                    11 -> "November";
+                                    12 -> "December"
+                                  end;
+                  (month_short) -> case Month of
+                                    1 -> "Jan";
+                                    2 -> "Feb";
+                                    3 -> "Mar";
+                                    4 -> "Apr";
+                                    5 -> "May";
+                                    6 -> "Jun";
+                                    7 -> "Jul";
+                                    8 -> "Aug";
+                                    9 -> "Sep";
+                                    10 -> "Oct";
+                                    11 -> "Nov";
+                                    12 -> "Dec"
+                                  end;
                   (day)   -> Day;
-                  (hour)  -> Hour;
+                  (day_long) -> case calendar:day_of_the_week(Year, Month, Day) of
+                                    1 -> "Monday";
+                                    2 -> "Tuesday";
+                                    3 -> "Wednesday";
+                                    4 -> "Thursday";
+                                    5 -> "Friday";
+                                    6 -> "Saturday";
+                                    7 -> "Sunday"
+                                  end;
+                  (day_short) -> case calendar:day_of_the_week(Year, Month, Day) of
+                                    1 -> "Mon";
+                                    2 -> "Tue";
+                                    3 -> "Wed";
+                                    4 -> "Thu";
+                                    5 -> "Fri";
+                                    6 -> "Sat";
+                                    7 -> "Sun"
+                                  end;
+                  (hour_24)  -> Hour;
+                  (hour_12)  -> case Hour of
+                                  12 -> 12;
+                                  _ -> Hour rem 12
+                                end;
+                  (meridiem) -> case Hour div 12 of
+                               0 -> "am";
+                               1 -> "pm"
+                          end;
+                  (mERIDIEM) -> case Hour div 12 of
+                               0 -> "AM";
+                               1 -> "PM"
+                          end;
                   (minute) -> Minute;
                   (second) -> Second;
-                  (millisecond) -> (Timestamp rem 1000000) div 1000;
-                  (microsecond) -> (Timestamp rem 1000000) rem 1000
+                  ({second_fractional, DecPlaces}) ->
+                     (Timestamp rem 1000000) div (1000000 div round(math:pow(10,DecPlaces)))
               end, Args),
     unicode:characters_to_binary(
       io_lib:format(Format, Args1)).
