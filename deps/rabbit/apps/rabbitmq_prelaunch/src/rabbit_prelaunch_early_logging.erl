@@ -22,6 +22,11 @@
          translate_formatter_conf/2]).
 -export([filter_log_event/2]).
 
+-ifdef(TEST).
+-export([levels/0,
+         determine_prefix/1]).
+-endif.
+
 -define(CONFIGURED_KEY, {?MODULE, configured}).
 
 setup_early_logging(#{log_levels := undefined} = Context) ->
@@ -397,23 +402,7 @@ translate_plaintext_formatter_conf(Var, Conf, GenericConfig) ->
     %% the formatter to format the final message.
     Format0 = cuttlefish:conf_get(Var ++ ".plaintext.format", Conf),
     Format = prepare_fmt_format(Format0),
-
-    %% Based on where the `msg' variable is, we determine the prefix of the
-    %% message. This is later used by the formatter to repeat the prefix for
-    %% each line making a multi-line message.
-    %%
-    %% If `msg' is not logged at all, we consider the line has no prefix.
-    {PrefixFormat0, LineFormat0} =
-    lists:foldl(
-      fun
-          (msg, {PF, LF})       -> {PF, LF ++ [msg]};
-          (Elem, {PF, [] = LF}) -> {PF ++ [Elem], LF};
-          (Elem, {PF, LF})      -> {PF, LF ++ [Elem]}
-      end, {[], []}, Format),
-    {PrefixFormat, LineFormat} = case {PrefixFormat0, LineFormat0} of
-                                     {_, []} -> {[], PrefixFormat0};
-                                     _       -> {PrefixFormat0, LineFormat0}
-                                 end,
+    {PrefixFormat, LineFormat} = determine_prefix(Format),
 
     %% log.console.use_colors
     %% log.console.color_esc_seqs
@@ -460,6 +449,24 @@ prepare_fmt_format(Rest, Parsed) when Rest =/= "" ->
     prepare_fmt_format(Rest1, [String | Parsed]);
 prepare_fmt_format("", Parsed) ->
     lists:reverse(Parsed).
+
+determine_prefix(Format) ->
+    %% Based on where the `msg' variable is, we determine the prefix of the
+    %% message. This is later used by the formatter to repeat the prefix for
+    %% each line making a multi-line message.
+    %%
+    %% If `msg' is not logged at all, we consider the line has no prefix.
+    {PrefixFormat0, LineFormat0} =
+    lists:foldl(
+      fun
+          (msg, {PF, LF})       -> {PF, LF ++ [msg]};
+          (Elem, {PF, [] = LF}) -> {PF ++ [Elem], LF};
+          (Elem, {PF, LF})      -> {PF, LF ++ [Elem]}
+      end, {[], []}, Format),
+    case {PrefixFormat0, LineFormat0} of
+        {_, []} -> {[], PrefixFormat0};
+        _       -> {PrefixFormat0, LineFormat0}
+    end.
 
 -spec translate_colors_conf(string(), cuttlefish_conf:conf()) ->
     {boolean(), map()}.
