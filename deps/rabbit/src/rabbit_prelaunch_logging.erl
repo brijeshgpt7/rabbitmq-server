@@ -98,7 +98,8 @@
          log_locations/0]).
 
 -ifdef(TEST).
--export([clear_config_run_number/0, get_less_severe_level/2]).
+-export([clear_config_run_number/0,
+         get_less_severe_level/2]).
 -endif.
 
 -export_type([log_location/0]).
@@ -538,7 +539,7 @@ compute_implicitly_enabled_output(Props) ->
     FileDisabledByDefault =
     ConsoleEnabled orelse ExchangeEnabled orelse SyslogEnabled,
 
-    FileProps = proplists:get_value(file, Props3),
+    FileProps = proplists:get_value(file, Props3, []),
     case is_output_explicitely_enabled(FileProps) of
         true ->
             Props3;
@@ -555,7 +556,7 @@ compute_implicitly_enabled_output(Props) ->
     end.
 
 compute_implicitly_enabled_output(PropName, Props) ->
-    SubProps = proplists:get_value(PropName, Props),
+    SubProps = proplists:get_value(PropName, Props, []),
     {Enabled, SubProps1} = compute_implicitly_enabled_output1(SubProps),
     {Enabled,
      lists:keystore(PropName, 1, Props, {PropName, SubProps1})}.
@@ -1401,6 +1402,7 @@ adjust_running_dependencies1([]) ->
 do_install_handlers([#{id := Id, module := Module} = Handler | Rest]) ->
     case logger:add_handler(Id, Module, Handler) of
         ok ->
+            ok = remove_syslog_logger_h_hardcoded_filters(Handler),
             do_install_handlers(Rest);
         {error, {handler_not_added, {open_failed, Filename, Reason}}} ->
             throw({error, {cannot_log_to_file, Filename, Reason}});
@@ -1408,6 +1410,14 @@ do_install_handlers([#{id := Id, module := Module} = Handler | Rest]) ->
             throw({error, {cannot_log_to_file, unknown, Reason}})
     end;
 do_install_handlers([]) ->
+    ok.
+
+remove_syslog_logger_h_hardcoded_filters(
+  #{id := Id, module := syslog_logger_h}) ->
+    _ = logger:remove_handler_filter(Id, progress),
+    _ = logger:remove_handler_filter(Id, remote_gl),
+    ok;
+remove_syslog_logger_h_hardcoded_filters(_) ->
     ok.
 
 -spec remove_old_handlers() -> ok.
